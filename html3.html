@@ -1,0 +1,482 @@
+<html><head>
+    <style>
+      .stage-flow-container {
+        display: flex;
+        align-items: center;
+        height: 100%;
+      }
+      .stage-step-container {
+        height: 100%;
+        aspect-ratio: 1/1;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .stage-step-bg {
+        display: flex;
+        height: 100%;
+        width: 100%;
+        background: White;
+        border-radius: 50%;
+        position: absolute;
+        padding: 3px;
+        z-index: 1;
+        
+      }
+      .stage-flow-item {
+        width: 90%;
+        height: 90%;
+        border-radius: 50%;
+        background-color: #ddd;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 18px;
+        color: #fff;
+        cursor: pointer;
+        z-index: 2;
+        font-family: 'Segoe UI';
+        font-weight: normal;
+        user-select: none;
+      }
+  
+      .stage-flow-item.active {
+        background-color: #6ab04c;
+        box-shadow: 0px 0px 7px rgba(0, 0, 0, 0.603);
+        font-weight: bold;
+      }
+  
+      .stage-flow-item.incomplete {
+        background-color: #ddd;
+      }
+  
+      .stage-flow-item.complete {
+        background-color: #6ab04c;
+      }
+  
+      .stage-flow-line {
+        width: 100%;
+        height: 15%;
+        background-color: #ddd; /* default color */
+        background: linear-gradient(to left, #ddd 50%, #6ab04c 50%) right;
+        position: relative;
+        background-size: 200%;
+        transition: .1s ease-out;
+        z-index: 0;
+    }
+  
+    .stage-flow-line.lineComplete {
+        background-position: left;
+        background-color: #ddd;
+    } 
+    .stage-flow-line.lineIncomplete {
+        background-position: right;
+        background-color: #ddd;
+    }  
+  
+    .chevron.right {
+          display: inline-block;
+          height: 100%;
+          width: 65px;
+          cursor: pointer;
+      }
+  
+      .chevron.left {
+          display: inline-block;
+          height: 100%;
+          width: 65px;
+          cursor: pointer;
+      }
+  
+    </style>
+  <meta></head>
+  <body>
+  
+    <div class="stage-flow-container"></div>
+  
+    <script>
+        
+      const formContext = parent.Xrm.Page;
+      const Xrm = parent.Xrm
+      let currentRecordId = formContext.data.entity.getId()
+      let BPFInstance
+      let BPFSteps
+      let currentStage
+      let viewingStage
+      main(currentRecordId)
+  
+  //main init function
+      async function main(currentRecord){
+          BPFInstance = await getBPFInstance(currentRecordId)
+          BPFSteps = await getBPFSteps(BPFInstance['_cx_betterprocessflow_value']);
+          initHTML(BPFSteps);
+          currentStepRecord = await getCurrentStage(BPFInstance['_cx_activestep_value'], BPFSteps)
+          currentStage = currentStepRecord['cx_bpfsteplink1.cx_order']
+          viewingStage = currentStage
+  
+          //renderControl
+          setTimeout(function(){initControl(currentStage)},1000)
+          
+  
+      }
+  
+  //functions
+      async function getBPFInstance(recordID) {
+  
+          let fetchInstanceXML = "?fetchXml=" +
+              `<fetch top="1">
+                  <entity name="cx_bpfinstance">
+                      <attribute name="cx_regardingid" />
+                      <attribute name="cx_bpfinstanceid" />
+                      <attribute name="cx_activestep" />
+                      <attribute name="cx_betterprocessflow" />
+                      <filter>
+                      <condition attribute="cx_regardingid" operator="eq" value="` + recordID + `" />
+                      </filter>
+                      <filter type="and">
+                      <condition attribute="statecode" operator="eq" value="0" />
+                      </filter>
+                      <link-entity name="cx_bpfstep" from="cx_bpfstepid" to="cx_activestep">
+                      <attribute name="cx_name" />
+                      <attribute name="cx_bpfstepid" />
+                      </link-entity>
+                  </entity>
+              </fetch>`
+  
+          return await Xrm.WebApi.retrieveMultipleRecords('cx_bpfinstance', fetchInstanceXML).then(
+          function success(result) {
+              console.log('BPF Instance retrieved successfully: ' + result.entities[0]['cx_bpfinstanceid'])
+              return result.entities[0]
+          },
+          function (error) {
+              console.log('BPF Instance not retrieved: '+ error.message);
+              // handle error conditions
+  
+          } 
+        )
+      }
+  
+      async function getBPFSteps(recordID) {
+  
+          let fetchStepsXML = "?fetchXml=" +
+              `<fetch top="50">
+                  <entity name="cx_betterprocessflow">
+                      <filter>
+                      <condition attribute="cx_betterprocessflowid" operator="eq" value="` + recordID + `" />
+                      </filter>
+                      <link-entity name="cx_bpfsteplink" from="cx_betterprocessflow" to="cx_betterprocessflowid">
+                          <attribute name="cx_bpfstep" />
+                          <attribute name="cx_order" />
+                          <attribute name="cx_bpfsteplinkid" />
+                          <link-entity name="cx_bpfstep" from="cx_bpfstepid" to="cx_bpfstep">
+                              <attribute name="cx_formsections" />
+                              <attribute name="cx_table" />
+                              <attribute name="cx_field" />
+                              <attribute name="cx_bpfstepid" />
+                          </link-entity>
+                      </link-entity>
+                  </entity>
+              </fetch>`
+  
+          return await Xrm.WebApi.retrieveMultipleRecords('cx_betterprocessflow', fetchStepsXML).then(
+              function success(result) {
+                  console.log('BPF Steps retrieved successfully')
+                  return result.entities
+              },
+              function (error) {
+                  console.log('BPF Steps not retrieved: '+ error.message);
+                  // handle error conditions
+  
+              } 
+          )
+      }
+  
+      async function updateActiveStep(recordID, tableName, fieldName, activeStepID) {
+  
+          var updateFieldName = fieldName + "@odata.bind"
+          var updateData = "/" + tableName + "(" + recordID + ")"
+          var data = {updateFieldName: updateData}
+  
+          Xrm.WebApi.updateRecord(tableName, recordID, data).then(
+              function success(result) {
+                  console.log(tableName + " updated!");
+              },
+              function (error) {
+                  console.log(error.message);
+              }
+          );
+  
+      }
+  
+      function initHTML(BPFSteps) {
+  
+          //create 1st chevron
+          let parentDiv = document.getElementsByClassName('stage-flow-container')[0]
+          let leftChev = createLeftChev()
+          parentDiv.appendChild(leftChev);
+  
+          //create items and lines
+          for (let i = 0; i < BPFSteps.length; i++) {
+              let stageNumber = BPFSteps[i]['cx_bpfsteplink1.cx_order'];
+              let stageName = BPFSteps[i]['cx_bpfsteplink1.cx_bpfstep@OData.Community.Display.V1.FormattedValue'];
+              let thisItemDiv = createStageItem(stageNumber, stageName);
+              parentDiv.appendChild(thisItemDiv);
+              if (i < BPFSteps.length - 1) {
+                  let thisLineDiv = createStageLine(stageNumber);
+                  parentDiv.appendChild(thisLineDiv);
+              }
+          }
+  
+          //Create last chevron
+          let rightChev = createRightChev()
+          parentDiv.appendChild(rightChev);
+  
+          function createLeftChev() {
+  
+              const div = document.createElement("div");
+              div.className = "chevron left";
+              div.setAttribute("onclick", "updateStage(-1)");
+              const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+              svg.setAttribute("width", "65");
+              svg.setAttribute("height", "100%");
+              svg.setAttribute("viewBox", "0 0 24 24");
+              svg.setAttribute("fill", "none");
+  
+              const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+              path.setAttribute("d", "M16.2426 6.34317L14.8284 4.92896L7.75739 12L14.8285 19.0711L16.2427 17.6569L10.5858 12L16.2426 6.34317Z");
+              path.setAttribute("fill", "darkgray");
+  
+              svg.appendChild(path);
+              div.appendChild(svg);
+  
+              return div;
+          }
+      
+          function createRightChev() {
+              const div = document.createElement("div");
+              div.className = "chevron right";
+              div.setAttribute("onclick", "updateStage(1)");
+              const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+              svg.setAttribute("width", "65");
+              svg.setAttribute("height", "100%");
+              svg.setAttribute("viewBox", "0 0 24 24");
+              svg.setAttribute("fill", "none");
+  
+              const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+              path.setAttribute("d", "M10.5858 6.34317L12 4.92896L19.0711 12L12 19.0711L10.5858 17.6569L16.2427 12L10.5858 6.34317Z");
+              path.setAttribute("fill", "darkgray");
+  
+              svg.appendChild(path);
+              div.appendChild(svg);
+  
+              return div;
+          }
+      
+          function createStageItem(stepNumber, stepName) {
+              const divContainer = document.createElement("div");
+              divContainer.className = "stage-step-container";
+              const divFlowItem = document.createElement("div");
+              divFlowItem.className = "stage-flow-item";
+              divFlowItem.setAttribute("id", stepNumber);
+              divFlowItem.setAttribute("onclick", "userClick("+stepNumber+")");
+              divFlowItem.textContent = stepName;
+  
+              const divBg = document.createElement("div");
+              divBg.className = "stage-step-bg";
+  
+              divContainer.appendChild(divFlowItem);
+              divContainer.appendChild(divBg);
+  
+              return divContainer;
+          }
+  
+          function createStageLine(stepNumber) {
+              const div = document.createElement("div");
+              div.setAttribute("id", stepNumber);
+              div.className = "stage-flow-line";
+              return div;
+          }
+  
+      }
+  
+      function getCurrentStage(ActiveStepId, BPFSteps){
+          let filterCurrentStep =
+              BPFSteps.filter(
+                  function(step){return step['cx_bpfsteplink1.cx_bpfstep'] === ActiveStepId}
+              )
+          return filterCurrentStep[0]
+          console.log('Current stage retrieved successfully: ' + filterCurrentStep[0]['cx_bpfsteplink1.cx_order'])
+      }
+
+      function getNStage(stepNumber, BPFSteps){
+          let filterCurrentStep =
+              BPFSteps.filter(
+                  function(step){return step['cx_bpfsteplink1.cx_order'] === stepNumber}
+              )
+          return filterCurrentStep[0]
+          console.log('Stage change retrieved successfully: ' + filterCurrentStep[0]['cx_bpfsteplink1.cx_order'])
+      }
+  
+      function initControl(currentStage) {
+          let stages = document.body.getElementsByClassName('stage-flow-item')
+          let stageLines = document.body.getElementsByClassName('stage-flow-line')
+          console.log('Stage on load: ' + currentStage)
+          for (let stage of stages) {
+              if(stage.id > currentStage) {
+                  var stageClass = 'incomplete'
+              }
+              else if (stage.id == currentStage) {
+                  var stageClass = 'active'
+              }
+              else{          
+                  var stageClass = 'complete'
+              }
+              stage.classList.add(stageClass)
+  
+          }
+  
+          for (let stageLine of stageLines) {
+          if(stageLine.id >= currentStage) {
+                  var stageLineClass = 'lineIncomplete'
+              }
+              else{          
+                  var stageLineClass = 'lineComplete'
+              }
+              stageLine.classList.add(stageLineClass)
+          }
+  
+          showHideSections(currentStage, BPFSteps)
+      }
+  
+      function userClick(selectedStage) {
+          if(selectedStage <= currentStage){
+          
+              let stages = document.body.getElementsByClassName('stage-flow-item')
+              let currentActiveStage = stages[viewingStage - 1]
+              let newActiveStage = stages[selectedStage - 1]
+  
+              currentActiveStage.classList.replace(currentActiveStage.classList.item(1), 'complete')
+              newActiveStage.classList.replace(newActiveStage.classList.item(1), 'active')
+  
+              viewingStage = selectedStage
+              console.log("View stage updated: " + viewingStage)
+          }
+  
+          else{
+            updateStage(1)
+          }
+  
+          showHideSections(viewingStage, BPFSteps)
+      }
+  
+      function showHideSections(stage, BPFSteps) {
+  
+          const summaryTab = formContext.ui.tabs.get('Summary')
+  
+          for (let i = 0; i < BPFSteps.length; i++) {
+  
+              let sectionName = BPFSteps[i]['cx_bpfstep2.cx_formsections']
+              if (!sectionName) continue;
+                  let stepNumber = BPFSteps[i]['cx_bpfsteplink1.cx_order']
+                  let stepSection = summaryTab.sections.get(sectionName)
+                  let isCurrentStep = stepNumber === stage
+  
+                  stepSection.setVisible(isCurrentStep)
+          }
+  
+      }
+  
+      function updateStage(arrow){
+          let stages = document.body.getElementsByClassName('stage-flow-item')
+          let requestedStageChange = currentStage + arrow
+
+          if(requestedStageChange > 0 && requestedStageChange <= stages.length){
+            let requestedBPFStep = getNStage(requestedStageChange)
+            let requestedStageTable = requestedBPFStep['cx_bpfstep2.cx_table']
+            let requestedStageField = requestedBPFStep['cx_bpfstep2.cx_field']
+            let requestedStageID = requestedBPFStep['cx_bpfstep2.cx_bpfstepid']
+
+            updateActiveStep(currentRecordId, requestedStageTable, requestedStageField, requestedStageID)
+            updateInstanceActiveStep(BPFInstance["cx_bpfinstanceid"], requestedStageID)
+            updatestageUI(requestedStageChange)
+          }
+  
+          async function updateActiveStep(recordID, tableName, fieldName, activeStepID) {
+  
+              var updateFieldName = fieldName + "@odata.bind"
+              var updateData = `cx_bpfsteps(${activeStepID})`
+              updateData = updateData.replace("{", "").replace("}", "")
+              var data = 
+                {
+                    [updateFieldName]: updateData
+                }
+  
+              Xrm.WebApi.updateRecord(tableName, recordID, data).then(
+                  function success(result) {
+                      console.log(tableName + " updated!");
+                  },
+                  function (error) {
+                      console.log(error.message);
+                  }
+              );
+  
+          }
+          
+          async function updateInstanceActiveStep(instanceID, activeStepID) {
+  
+                var updateData = `cx_bpfsteps(${activeStepID})`
+                updateData = updateData.replace("{", "").replace("}", "")
+                var data = 
+                    {
+                        "cx_activeStep@odata.bind": updateData
+                    }
+
+                Xrm.WebApi.updateRecord(tableName, recordID, data).then(
+                    function success(result) {
+                        console.log("BPF Instance Updated!");
+                    },
+                    function (error) {
+                        console.log(error.message);
+                    }
+                );
+
+            }
+
+
+          function updatestageUI(requestedStageChange){
+              currentStage = requestedStageChange
+              viewingStage = currentStage
+              let stageLines = document.body.getElementsByClassName('stage-flow-line')
+              for (let stage of stages) {
+                  var currentClass = stage.classList.item(1)
+                  if(stage.id > currentStage) {
+                      var stageClass = 'incomplete'
+                  }
+                  else if (stage.id == currentStage) {
+                      var stageClass = 'active'
+                  }
+                  else{          
+                      var stageClass = 'complete'
+                  }
+                  stage.classList.replace(currentClass, stageClass)
+              }
+  
+              for (let stageLine of stageLines) {
+                  var currentLineClass = stageLine.classList.item(1)
+                  if(stageLine.id >= currentStage) {
+                      var stageLineClass = 'lineIncomplete'
+                  }
+                  else{          
+                      var stageLineClass = 'lineComplete'
+                  }
+                  stageLine.classList.replace(currentLineClass, stageLineClass)
+              }
+              showHideSections(currentStage, BPFSteps)
+              console.log('updated stage: ' + currentStage)
+          }
+        }
+  
+    </script>
+  
+  </body></html>
